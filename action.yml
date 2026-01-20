@@ -1,0 +1,94 @@
+name: "Update Floating Version Tags"
+description: "Automatically create/update major and minor floating tags when a semver release is published"
+author: "SomoneIT"
+branding:
+  color: "green"
+  icon: "tag"
+
+inputs:
+  version:
+    description: "Version to create floating tags for (defaults to github.ref_name)"
+    required: false
+    default: ${{ github.ref_name }}
+
+outputs:
+  major-tag:
+    description: "The major floating tag that was created/updated (e.g., v1)"
+    value: ${{ steps.update-tags.outputs.MAJOR_TAG }}
+  minor-tag:
+    description: "The minor floating tag that was created/updated (e.g., v1.0)"
+    value: ${{ steps.update-tags.outputs.MINOR_TAG }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Update floating version tags
+      id: update-tags
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        # Validate semantic version format (v1.2.3 or 1.2.3)
+        if [[ ! "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "Version '$VERSION' is not a valid semantic version (expected format: v1.2.3 or 1.2.3)"
+          echo "Skipping floating tag creation"
+          exit 0
+        fi
+
+        # Remove 'v' prefix if present for parsing
+        VERSION_NUM="${VERSION#v}"
+
+        # Check if original version had 'v' prefix
+        if [[ "$VERSION" == v* ]]; then
+          PREFIX="v"
+        else
+          PREFIX=""
+        fi
+
+        # Parse version components
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_NUM"
+
+        # Define floating tags
+        MAJOR_TAG="${PREFIX}${MAJOR}"
+        MINOR_TAG="${PREFIX}${MAJOR}.${MINOR}"
+
+        echo "Release version: $VERSION"
+        echo "Major tag: $MAJOR_TAG"
+        echo "Minor tag: $MINOR_TAG"
+
+        echo "MAJOR_TAG=$MAJOR_TAG" >> $GITHUB_OUTPUT
+        echo "MINOR_TAG=$MINOR_TAG" >> $GITHUB_OUTPUT
+
+        # Get the commit SHA of the release
+        COMMIT_SHA=$(git rev-list -n 1 "$VERSION" 2>/dev/null || echo "$GITHUB_SHA")
+        echo "Target commit: $COMMIT_SHA"
+
+        # Function to create or update a tag
+        update_tag() {
+          local TAG_NAME="$1"
+          local TARGET_SHA="$2"
+
+          # Check if tag exists
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag '$TAG_NAME' exists, updating..."
+            # Delete the existing tag locally and remotely
+            git tag -d "$TAG_NAME" 2>/dev/null || true
+            git push origin --delete "$TAG_NAME" 2>/dev/null || true
+          else
+            echo "Tag '$TAG_NAME' does not exist, creating..."
+          fi
+
+          # Create and push the new tag
+          git tag "$TAG_NAME" "$TARGET_SHA"
+          git push origin "$TAG_NAME"
+          echo "Successfully updated tag '$TAG_NAME' to point to $TARGET_SHA"
+        }
+
+        # Update major floating tag (e.g., v1)
+        update_tag "$MAJOR_TAG" "$COMMIT_SHA"
+
+        # Update minor floating tag (e.g., v1.0)
+        update_tag "$MINOR_TAG" "$COMMIT_SHA"
+
+        echo "✅ Floating version tags updated successfully!"
